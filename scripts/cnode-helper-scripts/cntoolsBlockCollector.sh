@@ -2,7 +2,12 @@
 # shellcheck disable=SC1090,SC2086
 
 # get common env variables
-. "$(dirname $0)"/env
+. "$(dirname $0)"/env_mc4_love
+
+# this should get moved to ENV one I'm done testing.  get this from your pooltool login
+PT_MY_POOL_ID="3ad8238d37a45ef4022de1d2a175dc7a1f8d296dac4ec3f2728e38a7"
+PT_MY_API_KEY="xxxxxxx-a609-4f52-9d08-6362ce649ee2"
+
 
 # get cntools config parameters
 . "$(dirname $0)"/cntools.config
@@ -23,7 +28,7 @@ fi
 if [[ -z "${TMP_FOLDER}" ]]; then
   echo -e "${RED}Error:${NC} Temp directory not set in cntools.config!" && exit 1
 elif [[ ! -d "${TMP_FOLDER}" ]];then
-  mkdir -p "${TMP_FOLDER}" || { 
+  mkdir -p "${TMP_FOLDER}" || {
     echo -e "${RED}Error:${NC} Failed to create cntools temp directory: ${TMP_FOLDER}"
     exit 1
   }
@@ -92,5 +97,27 @@ while read -r logentry; do
     --arg _json_trace "Invalid Block (base64 enc json): ${logentry}" \
     '[.[] | select(.slot == $_slot) += {"hash": $_json_trace}]' \
     "${blocks_file}" > "${TMP_FOLDER}/blocks.json" && mv -f "${TMP_FOLDER}/blocks.json" "${blocks_file}"
+  elif [[ $(_jq '.data.kind') = "TraceAddBlockEvent.AddedToCurrentChain" ]]; then
+    at="$(_jq '.at')"
+    tip="$(_jq '.data.newtip')"
+    headers="$(_jq '.data.headers')"
+    echo " ~~ NEW TIP ~~"
+    echo $at
+    echo $tip
+    echo $headers
+
+    if [[ $tip =~ \"([a-f0-9]{64})\"\@([0-9]*) ]]; then
+      blockHash=${BASH_REMATCH[1]}
+      slotNo=${BASH_REMATCH[2]}
+      echo "match: '${BASH_REMATCH[2]}'"
+      if [[ $headers =~ (\"blockNo\"\: \")([0-9]*)\" ]]; then
+        blockNo=${BASH_REMATCH[2]}
+        JSON="$(jq -n --compact-output --arg MY_API_KEY "$PT_MY_API_KEY" --arg MY_POOL_ID "$PT_MY_POOL_ID" --arg AT "$at" --arg BLOCKNO "$blockNo" --arg SLOTNO "$slotNo" --arg BLOCKHASH "$blockHash" '{apiKey: $MY_API_KEY, poolId: $MY_POOL_ID, data: {at: $AT, blockNo: $BLOCKNO, slotNo: $SLOTNO, blockHash: $BLOCKHASH}}')"
+        echo "Packet Sent: $JSON"
+        RESPONSE="$(curl -s -H "Accept: application/json" -H "Content-Type:application/json" -X POST --data "$JSON" "https://api.pooltool.io/v0/sendstats")"
+        echo $RESPONSE
+      else echo "no match found"; fi
+
+    else echo "no match found"; fi
   fi
 done < <(tail -F -n0 "${logfile}" | jq -c -r '. | @base64')
